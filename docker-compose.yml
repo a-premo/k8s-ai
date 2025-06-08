@@ -1,0 +1,136 @@
+version: '3.8'
+
+services:
+  # Backend service
+  backend:
+    build: 
+      context: ./backend
+      dockerfile: Dockerfile
+    ports:
+      - "3001:3001"
+    volumes:
+      # Mount kubeconfig for real cluster access (comment out for demo mode)
+      - ~/.kube:/root/.kube:rw
+    environment:
+      - ENVIRONMENT=development
+      - PORT=3001
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:3001/api/v1/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+    profiles:
+      - prod
+    networks:
+      default:
+        aliases:
+          - backend
+
+  # Frontend service
+  frontend:
+    build:
+      context: ./frontend
+      dockerfile: Dockerfile
+    ports:
+      - "3000:80"
+    depends_on:
+      backend:
+        condition: service_healthy
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+    profiles:
+      - prod
+
+  # Development backend (for hot reload)
+  backend-dev:
+    build: 
+      context: ./backend
+      dockerfile: Dockerfile.dev
+    ports:
+      - "3001:3001"
+    volumes:
+      - ./backend:/app
+      - ~/.kube:/root/.kube:ro
+    environment:
+      - ENVIRONMENT=development
+      - PORT=3001
+    profiles:
+      - dev
+    restart: unless-stopped
+    networks:
+      default:
+        aliases:
+          - backend
+
+  # Development frontend (for hot reload)
+  frontend-dev:
+    build:
+      context: ./frontend
+      dockerfile: Dockerfile.dev
+    ports:
+      - "3000:3000"
+    volumes:
+      - ./frontend:/app
+      - /app/node_modules
+    depends_on:
+      - backend-dev
+    profiles:
+      - dev
+    restart: unless-stopped
+
+  # Demo backend (no kubeconfig access - uses mock data)
+  backend-demo:
+    build: 
+      context: ./backend
+      dockerfile: Dockerfile
+    ports:
+      - "3001:3001"
+    environment:
+      - ENVIRONMENT=development
+      - PORT=3001
+      - KUBECONFIG=/nonexistent/path
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:3001/api/v1/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+    profiles:
+      - demo
+    networks:
+      default:
+        aliases:
+          - backend
+
+  # Demo frontend
+  frontend-demo:
+    build:
+      context: ./frontend
+      dockerfile: Dockerfile
+    ports:
+      - "3000:80"
+    depends_on:
+      backend-demo:
+        condition: service_healthy
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+    profiles:
+      - demo
+
+# Networks
+networks:
+  default:
+    name: k8s-ai-network
+
+# Volumes for persistent data
+volumes:
+  node_modules:

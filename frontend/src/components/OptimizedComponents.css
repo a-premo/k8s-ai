@@ -1,0 +1,265 @@
+/* Optimized Components CSS */
+
+/* Loading Spinner */
+.loading-spinner {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  padding: 40px;
+  color: #6b7280;
+  gap: 12px;
+}
+
+.spinner {
+  width: 32px;
+  height: 32px;
+  border: 3px solid #e5e7eb;
+  border-top: 3px solid #3b82f6;
+  border-radius: 50%;
+  animation: spin 1s linear infinite;
+}
+
+@keyframes spin {
+  0% { transform: rotate(0deg); }
+  100% { transform: rotate(360deg); }
+}
+
+/* Connection Status */
+.connection-status {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 0.875rem;
+  padding: 4px 8px;
+  border-radius: 6px;
+  transition: all 0.15s ease;
+}
+
+.status-green {
+  color: #065f46;
+  background-color: #d1fae5;
+}
+
+.status-yellow {
+  color: #92400e;
+  background-color: #fef3c7;
+}
+
+.status-red {
+  color: #991b1b;
+  background-color: #fee2e2;
+}
+
+.status-gray {
+  color: #6b7280;
+  background-color: #f3f4f6;
+}
+
+/* Optimized Resource Table Controls */
+.optimized-resource-table {
+  display: flex;
+  flex-direction: column;
+  height: 100%;
+  gap: 16px;
+}
+
+.table-controls {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  padding: 16px;
+  background: #f9fafb;
+  border-radius: 8px;
+  border: 1px solid #e5e7eb;
+}
+
+.search-filters {
+  display: flex;
+  gap: 12px;
+  align-items: center;
+}
+
+.search-input {
+  padding: 8px 12px;
+  border: 1px solid #d1d5db;
+  border-radius: 6px;
+  font-size: 0.875rem;
+  min-width: 250px;
+  transition: border-color 0.15s ease;
+}
+
+.search-input:focus {
+  outline: none;
+  border-color: #3b82f6;
+  box-shadow: 0 0 0 3px rgba(59, 130, 246, 0.1);
+}
+
+.status-filter {
+  padding: 8px 12px;
+  border: 1px solid #d1d5db;
+  border-radius: 6px;
+  font-size: 0.875rem;
+  background: white;
+  cursor: pointer;
+  transition: border-color 0.15s ease;
+}
+
+.status-filter:focus {
+  outline: none;
+  border-color: #3b82f6;
+  box-shadow: 0 0 0 3px rgba(59, 130, 246, 0.1);
+}
+
+.refresh-button {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 8px 16px;
+  background: #3b82f6;
+  color: white;
+  border: none;
+  border-radius: 6px;
+  font-size: 0.875rem;
+  font-weight: 500;
+  cursor: pointer;
+  transition: all 0.15s ease;
+}
+
+.refresh-button:hover {
+  background: #2563eb;
+  transform: translateY(-1px);
+}
+
+.refresh-button:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+  transform: none;
+}
+
+/* Resource Name Clickable Styling */
+.resource-name {
+  font-weight: 600;
+  color: #3b82f6;
+  text-decoration: none;
+  transition: all 0.15s ease;
+  border: none;
+  background: none;
+  padding: 0;
+  cursor: pointer;
+  font-size: inherit;
+}
+
+.resource-name:hover {
+  color: #2563eb;
+  text-decoration: underline;
+  transform: translateX(2px);
+}
+
+/* Performance optimizations */
+.optimized-resource-table * {
+  box-sizing: border-box;
+}
+
+/* Reduce repaints with will-change */
+.virtual-table-row {
+  will-change: transform;
+}
+
+.action-button {
+  will-change: transform;
+}
+
+/* GPU acceleration for smooth animations */
+.clickable-cell,
+.action-button,
+.refresh-button {
+  transform: translateZ(0);
+  backface-visibility: hidden;
+}
+
+/* Optimize text rendering */
+.virtual-table-cell,
+.virtual-table-header-cell {
+  text-rendering: optimizeSpeed;
+  font-feature-settings: "kern" 0;
+}
+
+/* Responsive design */
+@media (max-width: 768px) {
+  .table-controls {
+    flex-direction: column;
+    gap: 12px;
+    align-items: stretch;
+  }
+  
+  .search-filters {
+    flex-direction: column;
+    gap: 8px;
+  }
+  
+  .search-input {
+    min-width: auto;
+    width: 100%;
+  }
+}
+
+/* Dark mode support */
+@media (prefers-color-scheme: dark) {
+  .optimized-resource-table {
+    --bg-color: #1f2937;
+    --text-color: #f9fafb;
+    --border-color: #4b5563;
+    --hover-bg: #374151;
+  }
+  
+  .table-controls {
+    background: #374151;
+    border-color: #4b5563;
+  }
+  
+  .search-input,
+  .status-filter {
+    background: #1f2937;
+    border-color: #4b5563;
+    color: #f9fafb;
+  }
+  
+  .search-input::placeholder {
+    color: #9ca3af;
+  }
+}
+
+/* High contrast mode support */
+@media (prefers-contrast: high) {
+  .connection-status {
+    border: 2px solid currentColor;
+  }
+  
+  .action-button,
+  .refresh-button {
+    border: 2px solid currentColor;
+  }
+  
+  .resource-name:focus {
+    outline: 3px solid currentColor;
+    outline-offset: 2px;
+  }
+}
+
+/* Reduced motion support */
+@media (prefers-reduced-motion: reduce) {
+  .spinner {
+    animation: none;
+  }
+  
+  .action-button,
+  .refresh-button,
+  .resource-name {
+    transition: none;
+  }
+  
+  .virtual-table-row {
+    will-change: auto;
+  }
+} 

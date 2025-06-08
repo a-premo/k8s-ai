@@ -1,0 +1,26 @@
+{
+  "name": "k8s-ai-ide",
+  "version": "1.0.0",
+  "description": "K8s AI IDE - Full Stack Application with Go Backend",
+  "scripts": {
+    "install-deps": "cd frontend && npm install",
+    "dev": "concurrently \"npm run backend\" \"npm run frontend\"",
+    "frontend": "cd frontend && npm start",
+    "backend": "cd backend && make dev",
+    "build": "cd frontend && npm run build",
+    "start": "cd backend && make run",
+    "setup": "npm run install-deps"
+  },
+  "devDependencies": {
+    "concurrently": "^8.2.0"
+  },
+  "keywords": [
+    "kubernetes",
+    "ai",
+    "ide",
+    "go",
+    "performance"
+  ],
+  "author": "Your Name",
+  "license": "MIT"
+}
