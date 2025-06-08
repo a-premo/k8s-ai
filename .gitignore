@@ -260,3 +260,5 @@ junit.xml
 /backend/vendor/
 /backend/bin/
 *.exe 
+
+*.env
