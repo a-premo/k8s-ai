@@ -34,7 +34,7 @@ func main() {
 		k8sClient = k8s.NewMockClient()
 	}
 
-	aiService := ai.NewService(cfg.AIProvider, cfg.AIAPIKey) // Using AI service
+	aiService := ai.NewService() // AI service will auto-detect provider from environment
 	cacheService := cache.NewService(cfg.CacheTTL)
 
 	// Initialize handlers
@@ -46,6 +46,9 @@ func main() {
 	}
 
 	r := gin.New()
+
+	// Configure gin to handle larger request bodies
+	r.MaxMultipartMemory = 10 << 20 // 10MB
 
 	// Middleware
 	r.Use(middleware.Logger(logger))
@@ -104,6 +107,7 @@ func main() {
 
 			// Resource editing
 			k8sAPI.GET("/resource/:resourceType/:namespace/:name", h.GetResource)
+			k8sAPI.GET("/resource/:resourceType/:namespace/:name/events", h.GetResourceEvents)
 			k8sAPI.PUT("/resource", h.UpdateResource)
 		}
 
@@ -137,7 +141,6 @@ func main() {
 	logger.Info("🚀 K8s AI IDE Backend started",
 		zap.Int("port", port),
 		zap.String("environment", cfg.Environment),
-		zap.String("ai_provider", cfg.AIProvider),
 	)
 
 	portStr := fmt.Sprintf(":%d", port)

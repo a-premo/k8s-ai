@@ -464,17 +464,29 @@ func (c *client) GetResource(resourceType, namespace, name string) (interface{},
 		return nil, err
 	}
 
-	return result.Object, nil
+	// Return the full unstructured object, not just the Object field
+	// This preserves the proper structure for YAML marshaling
+	return result, nil
 }
 
 func (c *client) UpdateResource(resourceType, namespace, name, content string) error {
+	fmt.Printf("DEBUG: UpdateResource called - type: %s, namespace: %s, name: %s, content length: %d\n",
+		resourceType, namespace, name, len(content))
+
 	gvr := getGVR(resourceType)
 
-	// Parse YAML content
+	// Parse JSON content (converted from YAML by handler)
 	obj := &unstructured.Unstructured{}
 	if err := obj.UnmarshalJSON([]byte(content)); err != nil {
+		contentPreview := content
+		if len(content) > 500 {
+			contentPreview = content[:500] + "..."
+		}
+		fmt.Printf("DEBUG: Failed to unmarshal JSON content: %v\nContent: %s\n", err, contentPreview)
 		return fmt.Errorf("failed to parse resource content: %v", err)
 	}
+
+	fmt.Printf("DEBUG: Successfully parsed resource object\n")
 
 	// Update the resource
 	if isNamespaced(resourceType) {
@@ -493,6 +505,7 @@ func (c *client) UpdateResource(resourceType, namespace, name, content string) e
 // getGVR returns the GroupVersionResource for a resource type
 func getGVR(resourceType string) schema.GroupVersionResource {
 	resourceTypes := map[string]schema.GroupVersionResource{
+		// Singular forms
 		"pod":                   {Group: "", Version: "v1", Resource: "pods"},
 		"deployment":            {Group: "apps", Version: "v1", Resource: "deployments"},
 		"service":               {Group: "", Version: "v1", Resource: "services"},
@@ -508,6 +521,23 @@ func getGVR(resourceType string) schema.GroupVersionResource {
 		"storageclass":          {Group: "storage.k8s.io", Version: "v1", Resource: "storageclasses"},
 		"node":                  {Group: "", Version: "v1", Resource: "nodes"},
 		"namespace":             {Group: "", Version: "v1", Resource: "namespaces"},
+
+		// Plural forms (for frontend compatibility)
+		"pods":                   {Group: "", Version: "v1", Resource: "pods"},
+		"deployments":            {Group: "apps", Version: "v1", Resource: "deployments"},
+		"services":               {Group: "", Version: "v1", Resource: "services"},
+		"ingresses":              {Group: "networking.k8s.io", Version: "v1", Resource: "ingresses"},
+		"configmaps":             {Group: "", Version: "v1", Resource: "configmaps"},
+		"secrets":                {Group: "", Version: "v1", Resource: "secrets"},
+		"daemonsets":             {Group: "apps", Version: "v1", Resource: "daemonsets"},
+		"statefulsets":           {Group: "apps", Version: "v1", Resource: "statefulsets"},
+		"jobs":                   {Group: "batch", Version: "v1", Resource: "jobs"},
+		"cronjobs":               {Group: "batch", Version: "v1", Resource: "cronjobs"},
+		"persistentvolumes":      {Group: "", Version: "v1", Resource: "persistentvolumes"},
+		"persistentvolumeclaims": {Group: "", Version: "v1", Resource: "persistentvolumeclaims"},
+		"storageclasses":         {Group: "storage.k8s.io", Version: "v1", Resource: "storageclasses"},
+		"nodes":                  {Group: "", Version: "v1", Resource: "nodes"},
+		"namespaces":             {Group: "", Version: "v1", Resource: "namespaces"},
 	}
 
 	if gvr, ok := resourceTypes[strings.ToLower(resourceType)]; ok {
@@ -523,6 +553,9 @@ func isNamespaced(resourceType string) bool {
 	clusterScoped := []string{
 		"node", "namespace", "persistentvolume", "storageclass",
 		"clusterrole", "clusterrolebinding",
+		// Plural forms
+		"nodes", "namespaces", "persistentvolumes", "storageclasses",
+		"clusterroles", "clusterrolebindings",
 	}
 
 	for _, r := range clusterScoped {

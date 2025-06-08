@@ -101,15 +101,32 @@ const ModernAIChat = ({ isOpen, onClose, k8sData, currentCluster }) => {
     setIsLoading(true);
 
     try {
+      // Create summarized context to prevent large payloads
+      const summarizedContext = createSummarizedContext(k8sData, currentCluster);
+      
+      // If context is still too large, create minimal context
+      const contextStr = JSON.stringify(summarizedContext);
+      const sizeInBytes = new Blob([contextStr]).size;
+      
+      let finalContext = summarizedContext;
+      if (sizeInBytes > 100000) { // If over 100KB, create minimal context
+        console.warn('⚠️ Context still too large, creating minimal context');
+        finalContext = {
+          timestamp: new Date().toISOString(),
+          cluster: currentCluster ? {
+            name: currentCluster.name,
+            displayName: currentCluster.displayName,
+            status: currentCluster.status
+          } : null,
+          message: "Context too large - using minimal context"
+        };
+      }
+      
       const response = await new Promise((resolve) => {
         sendChatMessage(
           {
             message: messageText.trim(),
-            context: {
-              cluster: currentCluster,
-              resources: k8sData,
-              timestamp: new Date().toISOString(),
-            }
+            context: finalContext
           },
           {
             onSuccess: (data) => resolve(data),
@@ -157,6 +174,16 @@ const ModernAIChat = ({ isOpen, onClose, k8sData, currentCluster }) => {
   const handleSmartPrompt = (prompt) => {
     setInputMessage(prompt);
     handleSendMessage(prompt);
+  };
+
+  // Helper function to create summarized context
+  const createSummarizedContext = (data, cluster) => {
+    // Ultra-minimal context to debug 413 issues
+    return {
+      timestamp: new Date().toISOString(),
+      cluster: cluster?.name || 'dev',
+      summary: 'minimal context for debugging'
+    };
   };
 
   if (!isOpen) return null;

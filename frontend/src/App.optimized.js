@@ -18,7 +18,8 @@ const OptimizedResourceTable = lazy(() => import('./components/OptimizedResource
 const LogModal = lazy(() => import('./components/LogModal'));
 const ShellModal = lazy(() => import('./components/ShellModal'));
 const EditModal = lazy(() => import('./components/EditModal'));
-const AIAnalysisPanel = lazy(() => import('./components/AIAnalysisPanel'));
+const AIAssistant = lazy(() => import('./components/AIAssistant'));
+const AIAnalysisModal = lazy(() => import('./components/AIAnalysisModal'));
 
 // Memoized Loading Spinner
 const LoadingSpinner = React.memo(() => (
@@ -134,14 +135,14 @@ const K8sAIIDECore = () => {
     selectedNamespace: 'All Namespaces',
     searchQuery: '',
     sidebarCollapsed: false,
-    aiChatOpen: false,
+    aiAssistantOpen: false,
   });
 
   const [modalState, setModalState] = useState({
     log: { open: false, resource: null },
     shell: { open: false, resource: null },
     edit: { open: false, resource: null },
-    aiAnalysis: { open: false, resource: null, analysis: null },
+    aiAnalysis: { open: false, resource: null, analysis: null, isLoading: false, error: null },
   });
 
   const [chatMessages, setChatMessages] = useState([]);
@@ -363,7 +364,8 @@ const K8sAIIDECore = () => {
           
           <button 
             className="ai-chat-toggle"
-            onClick={() => updateUiState({ aiChatOpen: !uiState.aiChatOpen })}
+            onClick={() => updateUiState({ aiAssistantOpen: !uiState.aiAssistantOpen })}
+            title="AI Assistant"
           >
             <Brain size={20} />
           </button>
@@ -414,20 +416,20 @@ const K8sAIIDECore = () => {
           </div>
         </main>
 
-        {/* AI Chat Panel */}
-        {uiState.aiChatOpen && (
-          <div className="ai-chat-panel">
-            <div className="chat-header">
-              <h3>AI Assistant</h3>
-              <button onClick={() => updateUiState({ aiChatOpen: false })}>
-                <X size={16} />
-              </button>
-            </div>
-            <div className="chat-messages">
-              {/* Chat implementation */}
-            </div>
-          </div>
-        )}
+        {/* AI Assistant Component */}
+        <Suspense fallback={null}>
+          <AIAssistant
+            clusterData={{
+              pods: [],
+              deployments: [],
+              namespace: uiState.selectedNamespace,
+              activeTab: activeTab?.type
+            }}
+            isOpen={uiState.aiAssistantOpen}
+            onClose={() => updateUiState({ aiAssistantOpen: false })}
+            onToggle={() => updateUiState({ aiAssistantOpen: !uiState.aiAssistantOpen })}
+          />
+        </Suspense>
       </div>
 
       {/* Modals */}
@@ -449,15 +451,20 @@ const K8sAIIDECore = () => {
         {modalState.edit.open && (
           <EditModal
             resource={modalState.edit.resource}
+            isOpen={modalState.edit.open}
             onClose={() => closeModal('edit')}
           />
         )}
 
         {modalState.aiAnalysis.open && (
-          <AIAnalysisPanel
-            resource={modalState.aiAnalysis.resource}
-            analysis={modalState.aiAnalysis.analysis}
+          <AIAnalysisModal
+            isOpen={modalState.aiAnalysis.open}
             onClose={() => closeModal('aiAnalysis')}
+            analysis={modalState.aiAnalysis.analysis}
+            isLoading={modalState.aiAnalysis.isLoading}
+            error={modalState.aiAnalysis.error}
+            resourceName={modalState.aiAnalysis.resource?.name || 'Unknown'}
+            resourceType={modalState.aiAnalysis.resource?.kind || 'Resource'}
           />
         )}
       </Suspense>

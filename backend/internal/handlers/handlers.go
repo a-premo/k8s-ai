@@ -1,8 +1,10 @@
 package handlers
 
 import (
+	"encoding/json"
 	"fmt"
 	"net/http"
+	"sort"
 	"strconv"
 	"strings"
 
@@ -14,6 +16,7 @@ import (
 	"github.com/gin-gonic/gin"
 	"github.com/gorilla/websocket"
 	"go.uber.org/zap"
+	"gopkg.in/yaml.v2"
 )
 
 type Handler struct {
@@ -36,6 +39,7 @@ func New(k8sClient k8s.Client, aiService ai.Service, cacheService cache.Service,
 		k8sClient:     k8sClient,
 		mockClient:    k8s.NewMockClient(),
 		cacheService:  cacheService,
+		aiService:     aiService,
 		logger:        logger,
 		kubeconfigMgr: kubeconfigMgr,
 		upgrader: websocket.Upgrader{
@@ -860,12 +864,16 @@ func (h *Handler) GetResource(c *gin.Context) {
 	namespace := c.Param("namespace")
 	name := c.Param("name")
 
+	h.logger.Info("Getting resource", zap.String("type", resourceType), zap.String("namespace", namespace), zap.String("name", name))
+
 	resource, err := h.getClient(c).GetResource(resourceType, namespace, name)
 	if err != nil {
 		h.logger.Error("Failed to get resource", zap.Error(err))
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to get resource"})
 		return
 	}
+
+	h.logger.Info("Got resource", zap.Any("resourceType", fmt.Sprintf("%T", resource)))
 
 	// Convert to YAML for editing
 	yaml, err := models.ResourceToYAML(resource)
@@ -875,24 +883,107 @@ func (h *Handler) GetResource(c *gin.Context) {
 		return
 	}
 
+	h.logger.Info("Converted to YAML", zap.Int("yamlLength", len(yaml)))
+
 	c.JSON(http.StatusOK, gin.H{
 		"yaml":     yaml,
 		"resource": resource,
 	})
 }
 
+// Get resource events
+func (h *Handler) GetResourceEvents(c *gin.Context) {
+	resourceType := c.Param("resourceType")
+	namespace := c.Param("namespace")
+	name := c.Param("name")
+
+	h.logger.Info("Getting resource events", zap.String("type", resourceType), zap.String("namespace", namespace), zap.String("name", name))
+
+	// Get all events in the namespace
+	events, err := h.getClient(c).GetEvents(namespace)
+	if err != nil {
+		h.logger.Error("Failed to get events", zap.Error(err))
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to get events"})
+		return
+	}
+
+	// Filter events for this specific resource
+	filteredEvents := []models.Event{}
+	for _, event := range events.Items {
+		if event.InvolvedObject.Name == name &&
+			strings.ToLower(event.InvolvedObject.Kind) == strings.ToLower(resourceType) {
+			filteredEvents = append(filteredEvents, models.EventFromK8s(&event))
+		}
+	}
+
+	// Sort by timestamp (newest first)
+	sort.Slice(filteredEvents, func(i, j int) bool {
+		return filteredEvents[i].LastSeen.After(filteredEvents[j].LastSeen)
+	})
+
+	c.JSON(http.StatusOK, filteredEvents)
+}
+
 // Update resource
 func (h *Handler) UpdateResource(c *gin.Context) {
 	var req models.EditResourceRequest
 	if err := c.ShouldBindJSON(&req); err != nil {
+		h.logger.Error("Failed to bind JSON request", zap.Error(err))
 		c.JSON(http.StatusBadRequest, gin.H{"error": "Invalid request"})
 		return
 	}
 
-	err := h.getClient(c).UpdateResource(req.ResourceType, req.Namespace, req.Name, req.Content)
+	h.logger.Info("UpdateResource request received",
+		zap.String("resourceType", req.ResourceType),
+		zap.String("namespace", req.Namespace),
+		zap.String("name", req.Name),
+		zap.Int("contentLength", len(req.Content)))
+
+	// Convert YAML directly to JSON using a helper function to avoid interface{} issues
+	jsonBytes, err := convertYAMLToJSON([]byte(req.Content))
+	if err != nil {
+		contentPreview := req.Content
+		if len(contentPreview) > 200 {
+			contentPreview = contentPreview[:200] + "..."
+		}
+		h.logger.Error("Failed to convert YAML to JSON", zap.Error(err), zap.String("content", contentPreview))
+		c.JSON(http.StatusBadRequest, gin.H{"error": "Invalid YAML format"})
+		return
+	}
+
+	// Update via K8s client
+	err = h.getClient(c).UpdateResource(req.ResourceType, req.Namespace, req.Name, string(jsonBytes))
 	if err != nil {
 		h.logger.Error("Failed to update resource", zap.Error(err))
-		c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to update resource"})
+
+		// Handle specific Kubernetes errors with better user messages
+		errMsg := err.Error()
+		statusCode := http.StatusInternalServerError
+		userFriendlyMsg := errMsg
+
+		// Check for pod immutability errors
+		if strings.Contains(errMsg, "pod updates may not change fields other than") ||
+			strings.Contains(errMsg, "Forbidden: pod updates may not change") {
+			statusCode = http.StatusBadRequest
+			userFriendlyMsg = "⚠️ Pod Editing Limitation: Most pod fields cannot be changed after creation. " +
+				"Only container images, tolerations, and termination settings can be modified. " +
+				"💡 Tip: Edit the parent Deployment/StatefulSet/DaemonSet instead, which will create new pods with your changes."
+		} else if strings.Contains(errMsg, "the object has been modified") {
+			statusCode = http.StatusConflict
+			userFriendlyMsg = "⚠️ Resource Conflict: This resource was modified by another process. Please refresh and try again."
+		} else if strings.Contains(errMsg, "not found") {
+			statusCode = http.StatusNotFound
+			userFriendlyMsg = "❌ Resource Not Found: The resource may have been deleted. Please refresh the resource list."
+		} else if strings.Contains(errMsg, "invalid") && strings.Contains(errMsg, "validation") {
+			statusCode = http.StatusBadRequest
+			userFriendlyMsg = "❌ Validation Error: The YAML contains invalid values. Please check the syntax and required fields."
+		}
+
+		c.JSON(statusCode, gin.H{
+			"error":      userFriendlyMsg,
+			"details":    errMsg, // Include original error for debugging
+			"suggestion": getPodEditingSuggestion(req.ResourceType),
+		})
 		return
 	}
 
@@ -966,6 +1057,26 @@ func (h *Handler) AIChat(c *gin.Context) {
 	if err := c.ShouldBindJSON(&req); err != nil {
 		c.JSON(http.StatusBadRequest, gin.H{"error": "Invalid request"})
 		return
+	}
+
+	// Check for oversized context
+	if contextBytes, err := json.Marshal(req.Context); err == nil {
+		contextSize := len(contextBytes)
+		// Limit context to ~1MB to prevent 413 errors
+		if contextSize > 1024*1024 {
+			h.logger.Warn("Context too large, truncating",
+				zap.Int("contextSize", contextSize),
+				zap.String("message", req.Message))
+
+			// Return a helpful error with suggestions
+			c.JSON(http.StatusRequestEntityTooLarge, gin.H{
+				"error":       "Request too large",
+				"message":     "The cluster context is too large to process. Try asking more specific questions about particular resources or namespaces.",
+				"contextSize": contextSize,
+				"maxSize":     1024 * 1024,
+			})
+			return
+		}
 	}
 
 	response, err := h.aiService.Chat(req.Message, req.Context)
@@ -1127,4 +1238,62 @@ func (h *Handler) GetCurrentCluster(c *gin.Context) {
 		"context": currentContext,
 		"status":  status,
 	})
+}
+
+// Helper function to convert YAML to JSON properly handling interface{} types
+func convertYAMLToJSON(yamlData []byte) ([]byte, error) {
+	// First unmarshal YAML into interface{}
+	var obj interface{}
+	if err := yaml.Unmarshal(yamlData, &obj); err != nil {
+		return nil, fmt.Errorf("invalid YAML: %v", err)
+	}
+
+	// Convert interface{} to JSON-compatible format
+	obj = convertMapInterface(obj)
+
+	// Marshal to JSON
+	jsonData, err := json.Marshal(obj)
+	if err != nil {
+		return nil, fmt.Errorf("failed to marshal to JSON: %v", err)
+	}
+
+	return jsonData, nil
+}
+
+// Helper function to recursively convert map[interface{}]interface{} to map[string]interface{}
+func convertMapInterface(obj interface{}) interface{} {
+	switch x := obj.(type) {
+	case map[interface{}]interface{}:
+		m := make(map[string]interface{})
+		for k, v := range x {
+			if str, ok := k.(string); ok {
+				m[str] = convertMapInterface(v)
+			}
+		}
+		return m
+	case []interface{}:
+		for i, v := range x {
+			x[i] = convertMapInterface(v)
+		}
+		return x
+	default:
+		return obj
+	}
+}
+
+// Helper function to provide resource-specific editing suggestions
+func getPodEditingSuggestion(resourceType string) string {
+	switch strings.ToLower(resourceType) {
+	case "pod", "pods":
+		return "Try editing the parent Deployment, StatefulSet, or DaemonSet instead. " +
+			"This will create new pods with your changes and handle the rolling update automatically."
+	case "deployment", "deployments":
+		return "Deployment editing will trigger a rolling update to apply your changes to all pods."
+	case "statefulset", "statefulsets":
+		return "StatefulSet editing will update pods in order, maintaining stable network identities."
+	case "daemonset", "daemonsets":
+		return "DaemonSet editing will update pods on all nodes where the DaemonSet runs."
+	default:
+		return "Check the Kubernetes documentation for field limitations on this resource type."
+	}
 }

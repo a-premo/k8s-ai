@@ -218,9 +218,11 @@ export const useAIAnalysis = () => {
   const { getApiUrl } = useCluster();
 
   return useMutation({
-    mutationFn: ({ type, data }) => {
+    mutationFn: async ({ type, data }) => {
+      let response;
+      
       if (type === 'pod') {
-        return fetch(getApiUrl('/ai/analyze/pod'), {
+        response = await fetch(getApiUrl('/ai/analyze/pod'), {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({
@@ -228,20 +230,33 @@ export const useAIAnalysis = () => {
             namespace: data.namespace,
             podData: data,
           }),
-        }).then(res => {
-          if (!res.ok) throw new Error(`API Error: ${res.statusText}`);
-          return res.json();
         });
-      } else {
-        return fetch(getApiUrl('/ai/analyze/cluster'), {
+      } else if (type === 'cluster') {
+        response = await fetch(getApiUrl('/ai/analyze/cluster'), {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify(data),
-        }).then(res => {
-          if (!res.ok) throw new Error(`API Error: ${res.statusText}`);
-          return res.json();
         });
+      } else {
+        throw new Error(`Unsupported analysis type: ${type}`);
       }
+      
+      if (!response.ok) {
+        // Try to parse error response
+        let errorData;
+        try {
+          errorData = await response.json();
+        } catch {
+          errorData = { error: `API Error: ${response.statusText}` };
+        }
+        
+        const error = new Error(errorData.error || `API Error: ${response.statusText}`);
+        error.details = errorData.details;
+        error.status = response.status;
+        throw error;
+      }
+      
+      return response.json();
     },
     onSuccess: (data, variables) => {
       // Cache the analysis result
@@ -306,19 +321,24 @@ export const usePrefetchResources = () => {
   }, [queryClient, getApiUrl]);
 };
 
-// Additional hooks for modal components
-export const useGetResourceYaml = (resourceType, namespace, name) => {
+// AI Edit Resource hook
+export const useAIEditResource = () => {
   const { getApiUrl } = useCluster();
   
-  return useQuery({
-    queryKey: [...queryKeys.resource(resourceType, namespace, name), 'yaml'],
-    queryFn: () => fetch(getApiUrl(`/k8s/resource/${resourceType}/${namespace}/${name}/yaml`)).then(res => {
-      if (!res.ok) throw new Error(`API Error: ${res.statusText}`);
-      return res.json();
-    }),
-    enabled: !!(resourceType && namespace && name),
-    staleTime: 60 * 1000, // 1 minute
-    select: (data) => data.yaml || data,
+  return useMutation({
+    mutationFn: ({ resourceType, currentYaml, instructions }) =>
+      fetch(getApiUrl('/ai/edit'), {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ 
+          resourceType, 
+          currentYaml, 
+          instructions 
+        }),
+      }).then(res => {
+        if (!res.ok) throw new Error(`API Error: ${res.statusText}`);
+        return res.json();
+      }),
   });
 };
 
@@ -327,15 +347,37 @@ export const useEditResource = () => {
   const { getApiUrl } = useCluster();
 
   return useMutation({
-    mutationFn: ({ resourceType, namespace, name, yaml }) =>
-      fetch(getApiUrl(`/k8s/resource/${resourceType}/${namespace}/${name}`), {
+    mutationFn: async ({ resourceType, namespace, name, yaml }) => {
+      const response = await fetch(getApiUrl('/k8s/resource'), {
         method: 'PUT',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ yaml }),
-      }).then(res => {
-        if (!res.ok) throw new Error(`API Error: ${res.statusText}`);
-        return res.json();
-      }),
+        body: JSON.stringify({ 
+          resourceType, 
+          namespace, 
+          name, 
+          content: yaml 
+        }),
+      });
+      
+      if (!response.ok) {
+        // Try to parse the error response for better error messages
+        let errorData;
+        try {
+          errorData = await response.json();
+        } catch {
+          errorData = { error: `API Error: ${response.statusText}` };
+        }
+        
+        // Create enhanced error object
+        const error = new Error(errorData.error || `API Error: ${response.statusText}`);
+        error.details = errorData.details;
+        error.suggestion = errorData.suggestion;
+        error.status = response.status;
+        throw error;
+      }
+      
+      return response.json();
+    },
     onSuccess: (data, variables) => {
       // Invalidate related queries
       queryClient.invalidateQueries({

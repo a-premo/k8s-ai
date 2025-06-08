@@ -1,21 +1,20 @@
 import React, { useState, useEffect } from 'react';
-import { X, FileText, Code, Activity, Terminal, Eye, Edit3, Trash2, RefreshCw } from 'lucide-react';
-import { useK8sResourceDetail, useGetResourceYaml, usePodLogs, useEditResource } from '../hooks/useK8sResource';
+import { X, FileText, Code, Activity, Terminal, Eye, Edit3, Trash2, RefreshCw, Sparkles, Save, RotateCcw } from 'lucide-react';
+import Editor from '@monaco-editor/react';
+import { useK8sResourceDetail, usePodLogs, useEditResource, useAIEditResource } from '../hooks/useK8sResource';
 
 const ResourceDetail = React.memo(({ resource, resourceType, onClose }) => {
   const [activeTab, setActiveTab] = useState('overview');
   const [isEditMode, setIsEditMode] = useState(false);
-  const [yamlContent, setYamlContent] = useState('');
+  const [editedYaml, setEditedYaml] = useState('');
+  const [aiInstructions, setAiInstructions] = useState('');
+  const [showAiAssist, setShowAiAssist] = useState(false);
+  const [events, setEvents] = useState([]);
+  const [eventsLoading, setEventsLoading] = useState(false);
   
-  const { data: resourceDetail, isLoading: detailLoading, error: detailError } = useK8sResourceDetail(
+  const { data: resourceDetail, isLoading: yamlLoading, error: detailError } = useK8sResourceDetail(
     resourceType, 
     resource.namespace, 
-    resource.name
-  );
-  
-  const { data: resourceYaml, isLoading: yamlLoading } = useGetResourceYaml(
-    resourceType,
-    resource.namespace,
     resource.name
   );
   
@@ -28,22 +27,70 @@ const ResourceDetail = React.memo(({ resource, resourceType, onClose }) => {
   );
   
   const editMutation = useEditResource();
+  const aiEditMutation = useAIEditResource();
 
+  // Update edited YAML when resource data loads
   useEffect(() => {
-    if (resourceYaml && !isEditMode) {
-      setYamlContent(resourceYaml);
+    if (resourceDetail?.yaml) {
+      setEditedYaml(resourceDetail.yaml);
     }
-  }, [resourceYaml, isEditMode]);
+  }, [resourceDetail]);
+
+  // Fetch events when Events tab is active
+  useEffect(() => {
+    if (activeTab === 'events') {
+      fetchEvents();
+    }
+  }, [activeTab, resource, resourceType]);
 
   useEffect(() => {
     const handleEscape = (e) => {
       if (e.key === 'Escape') {
-        onClose();
+        if (isEditMode) {
+          setIsEditMode(false);
+        } else {
+          onClose();
+        }
       }
     };
     document.addEventListener('keydown', handleEscape);
     return () => document.removeEventListener('keydown', handleEscape);
-  }, [onClose]);
+  }, [onClose, isEditMode]);
+
+  const fetchEvents = async () => {
+    setEventsLoading(true);
+    try {
+      const response = await fetch(
+        `/api/v1/k8s/resource/${resourceType}/${resource.namespace}/${resource.name}/events`
+      );
+      if (response.ok) {
+        const data = await response.json();
+        setEvents(data || []);
+      } else {
+        console.error('Failed to fetch events:', response.statusText);
+        setEvents([]);
+      }
+    } catch (error) {
+      console.error('Failed to fetch events:', error);
+      setEvents([]);
+    } finally {
+      setEventsLoading(false);
+    }
+  };
+
+  const formatTime = (timeString) => {
+    const time = new Date(timeString);
+    const now = new Date();
+    const diffMs = now - time;
+    const diffMinutes = Math.floor(diffMs / 60000);
+    const diffHours = Math.floor(diffMinutes / 60);
+    const diffDays = Math.floor(diffHours / 24);
+
+    if (diffDays > 0) return `${diffDays}d ago`;
+    if (diffHours > 0) return `${diffHours}h ago`;
+    if (diffMinutes > 0) return `${diffMinutes}m ago`;
+    return 'Just now';
+  };
 
   if (!resource) return null;
 
@@ -76,7 +123,7 @@ const ResourceDetail = React.memo(({ resource, resourceType, onClose }) => {
           'Ready': resource.ready,
           'Restarts': resource.restarts,
           'Node': resource.node,
-          'IP': resource.ip || 'N/A',
+          'IP': resource.ip || resource.podIP || 'N/A',
           'Containers': resource.containers?.map(c => c.name).join(', ') || 'N/A',
         };
       case 'deployments':
@@ -110,18 +157,78 @@ const ResourceDetail = React.memo(({ resource, resourceType, onClose }) => {
     }
   };
 
+  const getAdditionalInfo = () => {
+    if (resourceType === 'pods') {
+      return {
+        'Node': resource.node || 'N/A',
+        'Pod IP': resource.ip || resource.podIP || 'N/A',
+        'Restarts': resource.restarts?.toString() || '0',
+        'QoS Class': resource.qosClass || 'BestEffort',
+        'Priority': resource.priority?.toString() || '0',
+        'Service Account': resource.serviceAccount || 'default',
+      };
+    }
+    
+    if (resourceType === 'deployments') {
+      return {
+        'Ready Replicas': `${resource.readyReplicas || 0}/${resource.replicas || 0}`,
+        'Updated Replicas': resource.updatedReplicas?.toString() || '0',
+        'Available Replicas': resource.availableReplicas?.toString() || '0',
+        'Strategy Type': resource.strategyType || 'RollingUpdate',
+      };
+    }
+    
+    if (resourceType === 'services') {
+      return {
+        'Type': resource.type || 'ClusterIP',
+        'Cluster IP': resource.clusterIP || 'None',
+        'External IP': resource.externalIP || 'None',
+        'Session Affinity': resource.sessionAffinity || 'None',
+      };
+    }
+    
+    return {};
+  };
+
   const handleSaveYaml = async () => {
     try {
       await editMutation.mutateAsync({
         resourceType,
         namespace: resource.namespace,
         name: resource.name,
-        yaml: yamlContent
+        yaml: editedYaml
       });
       setIsEditMode(false);
+      setShowAiAssist(false);
     } catch (error) {
       console.error('Failed to save YAML:', error);
     }
+  };
+
+  const handleAiAssist = async () => {
+    if (!aiInstructions.trim()) return;
+    
+    try {
+      const response = await aiEditMutation.mutateAsync({
+        resourceType,
+        currentYaml: editedYaml,
+        instructions: aiInstructions
+      });
+      
+      if (response.modified_yaml) {
+        setEditedYaml(response.modified_yaml);
+      }
+      setAiInstructions('');
+    } catch (error) {
+      console.error('AI assist failed:', error);
+    }
+  };
+
+  const handleCancelEdit = () => {
+    setEditedYaml(resourceDetail?.yaml || '');
+    setIsEditMode(false);
+    setShowAiAssist(false);
+    setAiInstructions('');
   };
 
   const handleBackdropClick = (e) => {
@@ -129,6 +236,15 @@ const ResourceDetail = React.memo(({ resource, resourceType, onClose }) => {
       onClose();
     }
   };
+
+  const InfoItem = ({ label, value }) => (
+    <div className="flex justify-between">
+      <dt className="text-sm font-medium text-gray-600">{label}:</dt>
+      <dd className="text-sm text-gray-900 text-right max-w-xs truncate" title={value}>
+        {value}
+      </dd>
+    </div>
+  );
 
   return (
     <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50" onClick={handleBackdropClick}>
@@ -213,18 +329,22 @@ const ResourceDetail = React.memo(({ resource, resourceType, onClose }) => {
                   <div className="bg-gray-50 rounded-lg p-4">
                     <dl className="space-y-3">
                       {Object.entries(getResourceFields()).map(([key, value]) => (
-                        <div key={key} className="flex justify-between">
-                          <dt className="text-sm font-medium text-gray-600">{key}:</dt>
-                          <dd className="text-sm text-gray-900 text-right max-w-xs truncate" title={value}>
-                            {value}
-                          </dd>
-                        </div>
+                        <InfoItem key={key} label={key} value={value} />
                       ))}
                     </dl>
                   </div>
                 </div>
                 
                 <div className="space-y-4">
+                  <h3 className="text-lg font-semibold text-gray-900">Additional Information</h3>
+                  <div className="bg-gray-50 rounded-lg p-4">
+                    <dl className="space-y-3">
+                      {Object.entries(getAdditionalInfo()).map(([key, value]) => (
+                        <InfoItem key={key} label={key} value={value} />
+                      ))}
+                    </dl>
+                  </div>
+                  
                   <h3 className="text-lg font-semibold text-gray-900">Quick Actions</h3>
                   <div className="space-y-2">
                     <button
@@ -274,57 +394,174 @@ const ResourceDetail = React.memo(({ resource, resourceType, onClose }) => {
                   {isEditMode ? (
                     <>
                       <button
-                        onClick={() => setIsEditMode(false)}
-                        className="px-3 py-1 text-sm border rounded hover:bg-gray-100 transition-colors"
+                        onClick={() => setShowAiAssist(!showAiAssist)}
+                        className="flex items-center gap-1 px-3 py-1 text-sm border rounded hover:bg-gray-100 transition-colors"
                       >
+                        <Sparkles className="w-4 h-4" />
+                        AI Assist
+                      </button>
+                      <button
+                        onClick={handleCancelEdit}
+                        className="flex items-center gap-1 px-3 py-1 text-sm border rounded hover:bg-gray-100 transition-colors"
+                      >
+                        <RotateCcw className="w-4 h-4" />
                         Cancel
                       </button>
                       <button
                         onClick={handleSaveYaml}
                         disabled={editMutation.isPending}
-                        className="px-3 py-1 text-sm bg-blue-600 text-white rounded hover:bg-blue-700 disabled:opacity-50 transition-colors"
+                        className="flex items-center gap-1 px-3 py-1 text-sm bg-green-600 text-white rounded hover:bg-green-700 disabled:opacity-50 transition-colors"
                       >
-                        {editMutation.isPending ? 'Saving...' : 'Save'}
+                        <Save className="w-4 h-4" />
+                        {editMutation.isPending ? 'Applying...' : 'Apply'}
                       </button>
                     </>
                   ) : (
                     <button
                       onClick={() => setIsEditMode(true)}
-                      className="px-3 py-1 text-sm bg-blue-600 text-white rounded hover:bg-blue-700 transition-colors"
+                      className="flex items-center gap-1 px-3 py-1 text-sm bg-blue-600 text-white rounded hover:bg-blue-700 transition-colors"
                     >
+                      <Edit3 className="w-4 h-4" />
                       Edit
                     </button>
                   )}
                 </div>
               </div>
+
+              {/* AI Assist Panel */}
+              {showAiAssist && isEditMode && (
+                <div className="p-4 bg-blue-50 border-b">
+                  <div className="flex gap-2">
+                    <input
+                      type="text"
+                      placeholder="e.g., 'add resource limits of 1 CPU and 2Gi memory' or 'increase replicas to 3'"
+                      value={aiInstructions}
+                      onChange={(e) => setAiInstructions(e.target.value)}
+                      className="flex-1 px-3 py-2 border rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-blue-500"
+                      onKeyPress={(e) => e.key === 'Enter' && handleAiAssist()}
+                    />
+                    <button
+                      onClick={handleAiAssist}
+                      disabled={!aiInstructions.trim() || aiEditMutation.isPending}
+                      className="px-4 py-2 bg-blue-600 text-white rounded-lg text-sm hover:bg-blue-700 disabled:opacity-50 transition-colors"
+                    >
+                      {aiEditMutation.isPending ? 'Processing...' : 'Apply AI'}
+                    </button>
+                  </div>
+                  {aiEditMutation.isError && (
+                    <p className="text-red-600 text-sm mt-2">
+                      AI assist failed: {aiEditMutation.error?.message || 'Unknown error'}
+                    </p>
+                  )}
+                </div>
+              )}
               
-              <div className="flex-1 p-4">
+              <div className="flex-1 overflow-hidden">
                 {yamlLoading ? (
                   <div className="flex items-center justify-center h-full">
                     <div className="animate-spin w-8 h-8 border-2 border-blue-600 border-t-transparent rounded-full"></div>
                   </div>
+                ) : detailError ? (
+                  <div className="flex items-center justify-center h-full text-red-600">
+                    <div className="text-center">
+                      <X className="w-12 h-12 mx-auto mb-4 opacity-50" />
+                      <p>Failed to load YAML</p>
+                      <p className="text-sm mt-2">{detailError?.message || 'Unknown error'}</p>
+                    </div>
+                  </div>
                 ) : (
-                  <textarea
-                    value={yamlContent}
-                    onChange={(e) => setYamlContent(e.target.value)}
-                    readOnly={!isEditMode}
-                    className={`w-full h-full font-mono text-sm border rounded-lg p-4 resize-none focus:outline-none focus:ring-2 focus:ring-blue-500 ${
-                      isEditMode ? 'bg-white' : 'bg-gray-50'
-                    }`}
-                    spellCheck={false}
+                  <Editor
+                    height="100%"
+                    language="yaml"
+                    theme="vs-dark"
+                    value={isEditMode ? editedYaml : (resourceDetail?.yaml || '')}
+                    onChange={(value) => isEditMode && setEditedYaml(value || '')}
+                    options={{
+                      readOnly: !isEditMode,
+                      minimap: { enabled: false },
+                      fontSize: 13,
+                      wordWrap: 'on',
+                      scrollBeyondLastLine: false,
+                      automaticLayout: true,
+                      tabSize: 2,
+                      insertSpaces: true,
+                    }}
                   />
                 )}
               </div>
+              
+              {editMutation.isError && (
+                <div className="p-3 bg-red-50 border-t border-red-200 text-red-700 text-sm">
+                  Failed to save: {editMutation.error?.message || 'Unknown error'}
+                </div>
+              )}
+              
+              {editMutation.isSuccess && (
+                <div className="p-3 bg-green-50 border-t border-green-200 text-green-700 text-sm">
+                  Resource updated successfully!
+                </div>
+              )}
             </div>
           )}
 
           {activeTab === 'events' && (
             <div className="p-6 overflow-auto h-full">
-              <div className="text-center text-gray-500">
-                <Activity className="w-12 h-12 mx-auto mb-4 opacity-50" />
-                <p>Events for this resource would be displayed here</p>
-                <p className="text-sm mt-2">Implementation: GET /api/v1/k8s/events?fieldSelector=involvedObject.name={resource.name}</p>
-              </div>
+              <h3 className="text-lg font-semibold text-gray-900 mb-4">Events</h3>
+              {eventsLoading ? (
+                <div className="flex items-center justify-center h-32">
+                  <div className="animate-spin w-8 h-8 border-2 border-blue-600 border-t-transparent rounded-full"></div>
+                </div>
+              ) : events.length === 0 ? (
+                <div className="text-center text-gray-500 py-8">
+                  <Activity className="w-12 h-12 mx-auto mb-4 opacity-50" />
+                  <p>No events found for this resource</p>
+                </div>
+              ) : (
+                <div className="space-y-3">
+                  {events.map((event, idx) => (
+                    <div
+                      key={idx}
+                      className={`p-4 rounded-lg border ${
+                        event.type === 'Warning'
+                          ? 'border-yellow-200 bg-yellow-50'
+                          : 'border-gray-200 bg-gray-50'
+                      }`}
+                    >
+                      <div className="flex justify-between items-start">
+                        <div className="flex-1">
+                          <div className="flex items-center gap-2 mb-2">
+                            <span
+                              className={`text-xs px-2 py-1 rounded-full font-medium ${
+                                event.type === 'Warning'
+                                  ? 'bg-yellow-100 text-yellow-800'
+                                  : 'bg-blue-100 text-blue-800'
+                              }`}
+                            >
+                              {event.type}
+                            </span>
+                            <span className="text-sm font-medium text-gray-900">
+                              {event.reason}
+                            </span>
+                            {event.count > 1 && (
+                              <span className="text-xs text-gray-500 bg-gray-200 px-2 py-0.5 rounded">
+                                ×{event.count}
+                              </span>
+                            )}
+                          </div>
+                          <p className="text-sm text-gray-700 mb-2">{event.message}</p>
+                          <div className="flex items-center gap-4 text-xs text-gray-500">
+                            <span>Source: {event.sourceComponent || 'Unknown'}</span>
+                            <span>Last seen: {formatTime(event.lastSeen)}</span>
+                            {event.firstSeen !== event.lastSeen && (
+                              <span>First seen: {formatTime(event.firstSeen)}</span>
+                            )}
+                          </div>
+                        </div>
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              )}
             </div>
           )}
 

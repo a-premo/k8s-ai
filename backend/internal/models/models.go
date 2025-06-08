@@ -1,6 +1,7 @@
 package models
 
 import (
+	"encoding/json"
 	"fmt"
 	"strings"
 	"time"
@@ -712,19 +713,69 @@ func FormatAge(t time.Time) string {
 
 // ResourceToYAML converts a resource to YAML
 func ResourceToYAML(resource interface{}) (string, error) {
-	// Convert to unstructured first to clean metadata
-	unstructuredObj, err := toUnstructured(resource)
-	if err != nil {
-		return "", err
+	if resource == nil {
+		return "", fmt.Errorf("resource is nil")
 	}
 
-	// Clean metadata
-	cleanMetadata(unstructuredObj)
+	fmt.Printf("DEBUG: ResourceToYAML - Input type: %T\n", resource)
+
+	// Convert to JSON first to get a clean representation
+	jsonBytes, err := json.Marshal(resource)
+	if err != nil {
+		return "", fmt.Errorf("failed to marshal resource to JSON: %v", err)
+	}
+
+	fmt.Printf("DEBUG: ResourceToYAML - JSON length: %d\n", len(jsonBytes))
+
+	// Parse to map to clean metadata
+	var resourceMap map[string]interface{}
+	if err := json.Unmarshal(jsonBytes, &resourceMap); err != nil {
+		return "", fmt.Errorf("failed to unmarshal JSON: %v", err)
+	}
+
+	fmt.Printf("DEBUG: ResourceToYAML - Resource map keys: %v\n", getMapKeys(resourceMap))
+
+	// Clean metadata for editing (remove server-managed fields)
+	if metadata, ok := resourceMap["metadata"].(map[string]interface{}); ok {
+		// Remove server-managed fields that shouldn't be edited
+		delete(metadata, "managedFields")
+		delete(metadata, "resourceVersion")
+		delete(metadata, "uid")
+		delete(metadata, "selfLink")
+		delete(metadata, "generation")
+		delete(metadata, "creationTimestamp")
+		delete(metadata, "finalizers")
+
+		// Clean up ownerReferences for editing (usually system-managed)
+		delete(metadata, "ownerReferences")
+
+		// Clean up annotations - remove system annotations but keep user ones
+		if annotations, ok := metadata["annotations"].(map[string]interface{}); ok {
+			systemAnnotations := []string{
+				"kubectl.kubernetes.io/last-applied-configuration",
+				"deployment.kubernetes.io/revision",
+			}
+			for _, sysAnnotation := range systemAnnotations {
+				delete(annotations, sysAnnotation)
+			}
+			if len(annotations) == 0 {
+				delete(metadata, "annotations")
+			}
+		}
+	}
+
+	// Remove the status field entirely for editing (it's read-only)
+	delete(resourceMap, "status")
 
 	// Convert to YAML
-	yamlBytes, err := yaml.Marshal(unstructuredObj)
+	yamlBytes, err := yaml.Marshal(resourceMap)
 	if err != nil {
-		return "", err
+		return "", fmt.Errorf("failed to marshal to YAML: %v", err)
+	}
+
+	fmt.Printf("DEBUG: ResourceToYAML - Final YAML length: %d\n", len(yamlBytes))
+	if len(yamlBytes) < 200 {
+		fmt.Printf("DEBUG: ResourceToYAML - YAML content: %s\n", string(yamlBytes))
 	}
 
 	return string(yamlBytes), nil
@@ -732,9 +783,28 @@ func ResourceToYAML(resource interface{}) (string, error) {
 
 // toUnstructured converts any resource to unstructured
 func toUnstructured(resource interface{}) (*unstructured.Unstructured, error) {
-	// Implementation would convert the resource to unstructured format
-	// This is a simplified version
-	return &unstructured.Unstructured{}, nil
+	// If it's already an unstructured object, use it directly
+	if obj, ok := resource.(*unstructured.Unstructured); ok {
+		return obj, nil
+	}
+
+	// If it's a map (which is what the Kubernetes client returns), convert to unstructured
+	if objMap, ok := resource.(map[string]interface{}); ok {
+		return &unstructured.Unstructured{Object: objMap}, nil
+	}
+
+	// For other types, marshal to JSON then unmarshal to unstructured
+	jsonBytes, err := json.Marshal(resource)
+	if err != nil {
+		return nil, fmt.Errorf("failed to marshal resource to JSON: %v", err)
+	}
+
+	obj := &unstructured.Unstructured{}
+	if err := json.Unmarshal(jsonBytes, &obj.Object); err != nil {
+		return nil, fmt.Errorf("failed to unmarshal to unstructured: %v", err)
+	}
+
+	return obj, nil
 }
 
 // cleanMetadata removes server-managed fields from metadata
@@ -761,4 +831,51 @@ func cleanMetadata(obj *unstructured.Unstructured) {
 	}
 
 	unstructured.SetNestedMap(obj.Object, metadata, "metadata")
+}
+
+// cleanMetadataForEditing removes server-managed fields that shouldn't be in editable YAML
+func cleanMetadataForEditing(obj *unstructured.Unstructured) {
+	metadata, found, _ := unstructured.NestedMap(obj.Object, "metadata")
+	if !found {
+		return
+	}
+
+	// Remove server-managed fields that shouldn't be edited
+	delete(metadata, "managedFields")
+	delete(metadata, "resourceVersion")
+	delete(metadata, "uid")
+	delete(metadata, "selfLink")
+	delete(metadata, "generation")
+	delete(metadata, "ownerReferences")
+
+	// Remove status-related fields
+	delete(metadata, "finalizers")
+
+	// Clean up annotations - remove system annotations but keep user ones
+	if annotations, ok := metadata["annotations"].(map[string]interface{}); ok {
+		systemAnnotations := []string{
+			"kubectl.kubernetes.io/last-applied-configuration",
+			"deployment.kubernetes.io/revision",
+		}
+		for _, sysAnnotation := range systemAnnotations {
+			delete(annotations, sysAnnotation)
+		}
+		if len(annotations) == 0 {
+			delete(metadata, "annotations")
+		}
+	}
+
+	unstructured.SetNestedMap(obj.Object, metadata, "metadata")
+
+	// Also remove the status field entirely for editing
+	delete(obj.Object, "status")
+}
+
+// Helper function for debugging
+func getMapKeys(m map[string]interface{}) []string {
+	keys := make([]string, 0, len(m))
+	for k := range m {
+		keys = append(keys, k)
+	}
+	return keys
 }

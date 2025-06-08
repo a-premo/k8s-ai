@@ -34,7 +34,9 @@ up: build
 # Stop all services
 down:
 	@echo "🛑 Stopping all services..."
-	docker-compose down
+	docker-compose --profile prod down 
+	docker-compose --profile dev down 
+	docker-compose --profile demo down 
 
 # Start in development mode (hot reload)
 dev:
@@ -71,3 +73,6 @@ health:
 	@echo "🔍 Health check..."
 	@curl -f http://localhost:3001/api/v1/health && echo "✅ Backend is healthy" || echo "❌ Backend is down"
 	@curl -f http://localhost:3000 && echo "✅ Frontend is healthy" || echo "❌ Frontend is down" 
+
+prod-down:
+	 docker-compose --profile prod down 

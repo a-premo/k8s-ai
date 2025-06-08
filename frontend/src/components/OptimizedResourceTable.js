@@ -652,6 +652,7 @@ const OptimizedResourceTable = React.memo(({
           <EditModal
             resource={selectedResource}
             resourceType={resourceType}
+            isOpen={modalState.edit}
             onClose={() => closeModal('edit')}
             onSave={onRefresh}
           />

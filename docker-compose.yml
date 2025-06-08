@@ -11,6 +11,8 @@ services:
     volumes:
       # Mount kubeconfig for real cluster access (comment out for demo mode)
       - ~/.kube:/root/.kube:rw
+    env_file:
+      - ./backend/.env
     environment:
       - ENVIRONMENT=development
       - PORT=3001
@@ -56,6 +58,8 @@ services:
     volumes:
       - ./backend:/app
       - ~/.kube:/root/.kube:ro
+    env_file:
+      - ./backend/.env
     environment:
       - ENVIRONMENT=development
       - PORT=3001
@@ -90,6 +94,8 @@ services:
       dockerfile: Dockerfile
     ports:
       - "3001:3001"
+    env_file:
+      - ./backend/.env
     environment:
       - ENVIRONMENT=development
       - PORT=3001
